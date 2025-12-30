@@ -1,8 +1,8 @@
-import { useQuery } from '@tanstack/react-query';
-import { useSuiClient } from '@mysten/dapp-kit';
-import { REGISTRY_ID } from '../constants/config';
-import type { Token } from '../types';
-import { TOKENS } from '../constants/tokens';
+import { useQuery } from "@tanstack/react-query";
+import { useSuiClient } from "@mysten/dapp-kit";
+import { REGISTRY_ID } from "../constants/config";
+import type { Token } from "../types";
+import { TOKENS } from "../constants/tokens";
 
 export interface PoolData {
   id: string;
@@ -35,7 +35,7 @@ const parseTypeToToken = (typeString: string): Token | null => {
   if (token) return token;
 
   // Parse unknown token
-  const parts = typeString.split('::');
+  const parts = typeString.split("::");
   if (parts.length >= 3) {
     return {
       symbol: parts[parts.length - 1],
@@ -87,15 +87,75 @@ export function usePoolsFromRegistry() {
   const client = useSuiClient();
 
   return useQuery({
-    queryKey: ['poolsFromRegistry', REGISTRY_ID],
+    queryKey: ["poolsFromRegistry", REGISTRY_ID],
     queryFn: async (): Promise<PoolData[]> => {
-      // TODO: Implement this function
       // Return an empty array for now
-      console.log('TODO: Implement usePoolsFromRegistry');
-      console.log('Available client:', client);
-      console.log('Registry ID:', REGISTRY_ID);
+      const registryObj = await client.getObject({
+        id: REGISTRY_ID,
+        options: { showContent: true, showType: true },
+      });
 
-      return [];
+      const parentId = registryObj.data?.content?.fields?.pools?.fields?.id?.id;
+
+      const dynamicObjectFields = await client.getDynamicFields({
+        parentId,
+      });
+
+      let arr = await Promise.all(
+        dynamicObjectFields.data.map(
+          async (value: any) =>
+            await client.getDynamicFieldObject({
+              parentId,
+              name: value.name,
+            })
+        )
+      );
+
+      const res = await Promise.all(
+        arr.map(async (item: any) => {
+          const poolInfoFields = item.data?.content?.fields as {
+            name: {
+              fields: {
+                type_x: { fields: { name: string } };
+                type_y: { fields: { name: string } };
+              };
+            };
+            value: {
+              fields: {
+                pool_id: string;
+                created_at: string;
+                is_active: boolean;
+              };
+            };
+          };
+
+          const poolObj = await client.getObject({
+            id: poolInfoFields.value.fields.pool_id,
+            options: { showContent: true, showType: true },
+          });
+
+          const itemFields = item.data?.content?.fields;
+          let poolType = poolObj.data?.type || "";
+          let typeArgs = extractPoolTypeArgs(poolType);
+          let typeX = typeArgs?.[0];
+          let typeY = typeArgs?.[1];
+          return {
+            id: itemFields?.value?.fields?.pool_id,
+            tokenX: parseTypeToToken(typeX || ""),
+            tokenY: parseTypeToToken(typeY || ""),
+            typeX: typeX,
+            typeY: typeY,
+            reserveX: poolObj.data?.content?.fields?.balance_x || "0",
+            reserveY: poolObj.data?.content?.fields?.balance_y || "0",
+            lpSupply:
+              poolObj.data?.content?.fields?.lp_supply?.fields?.value || "0",
+            feeBps: poolObj.data?.content?.fields?.fee_bps || "0",
+            isActive: itemFields?.value?.fields?.is_active,
+            createdAt: parseInt(itemFields?.value?.fields?.created_at || "0"),
+          } as PoolData;
+        })
+      );
+      return res;
     },
     refetchInterval: 15000,
     staleTime: 10000,
@@ -243,19 +303,24 @@ export function useRegistryPoolCount() {
   const client = useSuiClient();
 
   return useQuery({
-    queryKey: ['registryPoolCount', REGISTRY_ID],
+    queryKey: ["registryPoolCount", REGISTRY_ID],
     queryFn: async (): Promise<number> => {
       try {
         const registryObj = await client.getObject({
           id: REGISTRY_ID,
-          options: { showContent: true },
+          options: { showContent: true, showType: true },
         });
 
-        if (!registryObj.data?.content || registryObj.data.content.dataType !== 'moveObject') {
+        if (
+          !registryObj.data?.content ||
+          registryObj.data.content.dataType !== "moveObject"
+        ) {
           return 0;
         }
 
-        const fields = registryObj.data.content.fields as { pool_count: string };
+        const fields = registryObj.data.content.fields as {
+          pool_count: string;
+        };
         return parseInt(fields.pool_count);
       } catch {
         return 0;
@@ -272,7 +337,7 @@ export function usePoolById(poolId?: string) {
   const client = useSuiClient();
 
   return useQuery({
-    queryKey: ['pool', poolId],
+    queryKey: ["pool", poolId],
     queryFn: async (): Promise<PoolData | null> => {
       if (!poolId) return null;
 
@@ -282,12 +347,16 @@ export function usePoolById(poolId?: string) {
           options: { showContent: true, showType: true },
         });
 
-        if (!poolObj.data?.content || poolObj.data.content.dataType !== 'moveObject') {
+        if (
+          !poolObj.data?.content ||
+          poolObj.data.content.dataType !== "moveObject"
+        ) {
           return null;
         }
 
-        const poolFields = poolObj.data.content.fields as unknown as PoolContent;
-        const poolType = poolObj.data.type || '';
+        const poolFields = poolObj.data.content
+          .fields as unknown as PoolContent;
+        const poolType = poolObj.data.type || "";
 
         const typeArgs = extractPoolTypeArgs(poolType);
         if (!typeArgs) return null;
@@ -300,15 +369,15 @@ export function usePoolById(poolId?: string) {
           tokenY: parseTypeToToken(typeY),
           typeX,
           typeY,
-          reserveX: poolFields.balance_x || '0',
-          reserveY: poolFields.balance_y || '0',
-          lpSupply: poolFields.lp_supply?.value || '0',
-          feeBps: parseInt(poolFields.fee_bps || '30'),
+          reserveX: poolFields.balance_x || "0",
+          reserveY: poolFields.balance_y || "0",
+          lpSupply: poolFields.lp_supply?.value || "0",
+          feeBps: parseInt(poolFields.fee_bps || "30"),
           isActive: true,
           createdAt: 0,
         };
       } catch (error) {
-        console.error('Error fetching pool:', error);
+        console.error("Error fetching pool:", error);
         return null;
       }
     },
